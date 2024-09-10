@@ -36,17 +36,20 @@ team_t team = {
 };
 
 /* single word (4) or double word (8) alignment */
-#define ALIGNMENT 8
+// #define ALIGNMENT 8
+#define ALIGNMENT 4
 
 /* rounds up to the nearest multiple of ALIGNMENT */
-#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
+// #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
+#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x3)
 
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
+#define SIZE_T_SIZE (ALIGN(sizeof(size_t))) // 4 in -m32
 
 /* Basic constants an macros */
 #define WSIZE               4
 #define DSIZE               8
 #define CHUNKSIZE           (1<<12) // 4KB
+// #define CHUNKSIZE           (1<<12) // 8KB
 
 #define MAX(x,y)            ((x)>(y)?(x):(y))
 
@@ -55,11 +58,9 @@ team_t team = {
 #define GET(p)              (*(unsigned int*)(p))
 #define PUT(p,val)          (*(unsigned int*)(p)=(val))
 
-#define GET_LONG(p)         (*(unsigned long*)(p))
-#define PUT_LONG(p,val)     (*(unsigned long*)(p)=(unsigned long)(val))
-
 #define GET_SIZE(p)         (GET(p) & ~0x7)
 #define GET_ALLOC(p)        (GET(p) & 0x1)
+#define GET_ALLOC_PREV(p)   ((GET(p) & 0x2)>>1)
 
 #define HDRP(bp)            ((char *)(bp)-WSIZE)
 #define FTRP(bp)            ((char *)(bp) + GET_SIZE(HDRP(bp))-DSIZE)
@@ -70,14 +71,15 @@ team_t team = {
 /*********************************************************
  * For REVIEWERS
  *********************************************************
- * free list는 LIFO로 관리
- * 컴파일 32비트인지 모르고 포인터 8바이트로 생각해서 PREV,NEXT 주소 공간 8바이트로 잡음. 대신 -m64로 컴파일해도 돌아감.
- * 할당시 footer 없애는 optimization 없음.
- * free list의 시작과 끝을 prologue(first_listp)와 epilogue(last_listp)로 잡음. (24/1), (0/1)
-   보통 첫번째 free block의 주소를 전역변수로 잡고 prologue를 free list의 마지막 요소로 잡던데
-   첫번째 요소를 free list에서 제거시 조건문이 들어가던데 처음과 끝을 할당된 block으로 잡으면 그부분에서는 좀 간단해짐
-   여기서는 stitch()가 이중 연결 없애주는 역할
+ * CS 교재의 segregated-fit에 해당
+ * size class는 power of 2로 4B초과는 하나의 class (total 12)
+ * (3-4), (5-8), (9-16), (17-32), (33-64), (65-128), (129-256), (257-512), (513-Ki), (Ki+1-2Ki), (2Ki+1-4Ki), (4Ki+1~)
+ * 분할 및 coalescing 수행
+ * 할당시 footer 지움 - 최소 block size는 3B(할당시 H+Data, 해제시 H+Next_ptr+F)
+ * 
  ********************************************************/
+
+#define FREE_LIST_COUNT 12
 
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
@@ -89,8 +91,7 @@ static void insert_head(void *bp);
 static void stitch_move(void *bp, void *np);
 
 
-static char * first_listp;
-static char * last_listp;
+static char * heap_listp;
 
 /* 
  * mm_init - initialize the malloc package.
@@ -99,23 +100,20 @@ static char * last_listp;
 int mm_init(void)
 {
     
-    if ((first_listp = mem_sbrk(12*WSIZE)) == (void *)-1){
+    if ((heap_listp = mem_sbrk((FREE_LIST_COUNT+3)*WSIZE)) == (void *)-1){
         return -1;
     }
-    PUT(first_listp,0);
-    PUT(first_listp+(1*WSIZE),PACK(3*DSIZE,1));
-    PUT(first_listp+(6*WSIZE),PACK(3*DSIZE,1));
-    first_listp += 2*WSIZE;
-    last_listp = first_listp + 6*WSIZE;
-    PUT(HDRP(last_listp),PACK(0,1));
-
-    PUT_LONG(first_listp+DSIZE,last_listp);
-    PUT_LONG(last_listp, first_listp);
-
-    // 어디서 사파 같은 걸 가져왔나
-    if (extend_heap(8) == NULL){
-        return -1;
+    PUT(heap_listp,0);
+    PUT(heap_listp+(1*WSIZE),PACK((FREE_LIST_COUNT+2)*WSIZE,1));
+    for (int i=0;i<FREE_LIST_COUNT;i++) {
+        PUT(heap_listp+((i+2)*WSIZE),heap_listp);
     }
+    PUT(heap_listp+(14*WSIZE),PACK(0,3));
+    heap_listp += 2*WSIZE;
+
+    // if (extend_heap(4) == NULL){
+    //     return -1;
+    // }
 
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL){
         return -1;
@@ -132,15 +130,10 @@ static void *extend_heap(size_t words)
     if ((long)(bp = mem_sbrk(size))==-1) {
         return NULL;
     }
-    bp = last_listp;
-    last_listp += size;
 
-    PUT(HDRP(last_listp),PACK(0,1));
     PUT(HDRP(bp),PACK(size,0));
     PUT(FTRP(bp),PACK(size,0));
-
-    PUT_LONG(last_listp,GET_LONG(bp));          // 꼬리&last 업데이트
-    PUT_LONG(GET_LONG(bp)+DSIZE,last_listp);
+    PUT(HDRP(NEXT_BLKP(bp)),PACK(0,1));
 
     return coalesce(bp);
 }
@@ -243,10 +236,10 @@ static void stitch(void *bp) {
 }
 
 static void insert_head(void *bp) {
-    PUT_LONG(bp+DSIZE,GET_LONG(first_listp+DSIZE));
-    PUT_LONG(GET_LONG(first_listp+DSIZE),bp);
-    PUT_LONG(bp,first_listp);
-    PUT_LONG(first_listp+DSIZE,bp);
+    PUT_LONG(bp+DSIZE,GET_LONG(heap_listp+DSIZE));
+    PUT_LONG(GET_LONG(heap_listp+DSIZE),bp);
+    PUT_LONG(bp,heap_listp);
+    PUT_LONG(heap_listp+DSIZE,bp);
 }
 
 static void stitch_move(void *bp, void *np) {
@@ -278,10 +271,9 @@ void *mm_realloc(void *ptr, size_t size)
 static void *find_fit(size_t size)
 {
     void *bp;
-    for (bp = (void *)GET_LONG(first_listp+DSIZE);GET_SIZE(HDRP(bp))>0;bp = (void *)GET_LONG(bp+DSIZE)) {
-        if (GET_SIZE(HDRP(bp))>=size){
-        // 시작은 first_listp 다음부터고 epilogue는 사이즈 0이므로(실제론 아니지만) for문 종료되기에 alloc인 lsb볼 필요없음.
-        // if ((GET_ALLOC(HDRP(bp))==0) && (GET_SIZE(HDRP(bp))>=size)){
+    for (bp = (void *)GET_LONG(heap_listp+DSIZE);GET_SIZE(HDRP(bp))>0;bp = (void *)GET_LONG(bp+DSIZE)) {
+        // if (GET_SIZE(HDRP(bp))>=size){
+        if ((GET_ALLOC(HDRP(bp))==0) && (GET_SIZE(HDRP(bp))>=size)){
             return bp;
         }
     }

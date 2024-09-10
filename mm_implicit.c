@@ -64,6 +64,12 @@ team_t team = {
 #define NEXT_BLKP(bp)       ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BLKP(bp)       ((char *)(bp) - GET_SIZE(HDRP(bp)-WSIZE))
 
+/*********************************************************
+ * For REVIEWERS
+ *********************************************************
+ * 할당시 footer 없애는 optimization 없음.
+ ********************************************************/
+
 static char * heap_listp;
 
 /* 
