@@ -48,8 +48,8 @@ team_t team = {
 /* Basic constants an macros */
 #define WSIZE               4
 #define DSIZE               8
-#define CHUNKSIZE           (1<<12) // 4KB
-// #define CHUNKSIZE           (1<<13) // 8KB
+// #define CHUNKSIZE           (1<<12) // 4KB
+#define CHUNKSIZE           (1<<20) // 1MB
 
 #define MAX(x,y)            ((x)>(y)?(x):(y))
 #define MIN(x,y)            ((x)>(y)?(y):(x))
@@ -57,7 +57,7 @@ team_t team = {
 #define PACK(size, alloc)   ((size)|(alloc))
 
 #define GET(p)              (*(unsigned int*)(p))
-#define PUT(p,val)          (*(unsigned int*)(p)=(unsigned int)(val))
+#define PUT(p,val)          (*(unsigned int*)(p)=(int)(val))
 
 // #define GET_SIZE(p)         (GET(p) & ~0x7)
 #define GET_SIZE(p)         (GET(p) & ~0x3)
@@ -66,7 +66,7 @@ team_t team = {
 #define GET_ALLOC_PREV(p)   (GET(p) & 0x2)
 
 #define HDRP(bp)            ((char *)(bp)-WSIZE)
-#define FTRP(bp)            ((char *)(bp) + GET_SIZE(HDRP(bp))-DSIZE)
+// #define FTRP(bp)            ((char *)(bp) + GET_SIZE(HDRP(bp))-DSIZE)
 
 #define NEXT_BLKP(bp)       ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BLKP(bp)       ((char *)(bp) - GET_SIZE(HDRP(bp)-WSIZE))
@@ -74,15 +74,19 @@ team_t team = {
 /*********************************************************
  * For REVIEWERS
  *********************************************************
- * CS 교재의 segregated-fit에 해당
- * size class는 power of 2로 4KB초과는 하나의 class (total 10)
- * (16), (17-32), (33-64), (65-128), (129-256), (257-512), (513-Ki), (Ki+1-2Ki), (2Ki+1-4Ki), (4Ki+1~)
- * 분할 및 coalescing 수행
- * 할당시 footer 지움(괜히 했음..)
- * __builtin_clz 사용했으므로 gcc나 clang에서만 동작
+ * PREV_BLK으로 넘어갈 일이 없으니 format에 footer는 필요없을 듯?
+ * size class는 power of 2이다.
+   buddy system에서 size class는 할당요청을 커버하는 모든 size class가 존재해야하는데
+   trace에서 확인해보면 random*.rep 생성시 args없으면 1<<15가 max block size인데 Makefile에 따로 args가 없는 듯 함.
+   realloc*.rep 생성에서는 realloc을 최대 614,784까지 요청
+   따라서 1MB까지 size class있어야함. (1<<20)
+ * free block에 Header, Prev, Next 있어야하니 최소 사이즈 16B(1<<4)
+   (1<<4), (1<<5), (1<<6), (1<<7), (1<<8), (1<<9), (1<<10), ... (1<<19), (1<<20)
+   총 17개의 size class존재
+ * 분할 및 coalescing은 2의 제곱수 기준으로 수행
  ********************************************************/
 
-#define FREE_LIST_COUNT 10
+#define FREE_LIST_COUNT 17
 
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);
@@ -98,20 +102,18 @@ static char * heap_listp;
 /* 
  * mm_init - initialize the malloc package.
  */
-
 int mm_init(void)
 {
     
-    if ((heap_listp = mem_sbrk((FREE_LIST_COUNT+4)*WSIZE)) == (void *)-1){
+    if ((heap_listp = mem_sbrk((FREE_LIST_COUNT+3)*WSIZE)) == (void *)-1){
         return -1;
     }
     PUT(heap_listp,0);
-    PUT(heap_listp+(1*WSIZE),PACK((FREE_LIST_COUNT+2)*WSIZE,1));
+    PUT(heap_listp+(1*WSIZE),PACK((FREE_LIST_COUNT+1)*WSIZE,1));
     for (int i=0;i<FREE_LIST_COUNT;i++) {
         PUT(heap_listp+((i+2)*WSIZE),heap_listp+2*WSIZE);
     }
-    PUT(heap_listp+((FREE_LIST_COUNT+2)*WSIZE),PACK((FREE_LIST_COUNT+2)*WSIZE,1));
-    PUT(heap_listp+((FREE_LIST_COUNT+3)*WSIZE),PACK(0,3));
+    PUT(heap_listp+((FREE_LIST_COUNT+2)*WSIZE),PACK(0,1));
     heap_listp += 2*WSIZE;
 
     if (extend_heap(CHUNKSIZE/WSIZE) == NULL){
@@ -124,15 +126,15 @@ static void *extend_heap(size_t words)
 {
     char *bp;
     size_t size;
-    // alignment 4로 했으니 없어도 될듯? >> 일단 없애니 터짐...
+    // alignment 4로 했으니 없어도 될듯? >> seg에서 터져서 일단 안건드림...
     size = (words % 2)? (words+1)*WSIZE : words * WSIZE;
 
     if ((long)(bp = mem_sbrk(size))==-1) {
         return NULL;
     }
 
-    PUT(HDRP(bp),PACK(size,GET_ALLOC_PREV(HDRP(bp))));
-    PUT(FTRP(bp),PACK(size,0));
+    PUT(HDRP(bp),PACK(size,0));
+    // PUT(FTRP(bp),PACK(size,0));
     PUT(HDRP(NEXT_BLKP(bp)),PACK(0,1));
 
     return coalesce(bp);
@@ -145,13 +147,14 @@ static void *extend_heap(size_t words)
 void *mm_malloc(size_t size)
 {
     char *bp;
-    size_t extend_size;
+    // size_t extend_size;
 
     if (size==0) {
         return NULL;
     }
 
     size_t newsize = ALIGN(size + WSIZE);
+    newsize = 1<<(32-__builtin_clz(newsize-1));
 
     if (newsize<=16) {
         newsize = 16;
@@ -162,8 +165,9 @@ void *mm_malloc(size_t size)
         return bp;
     }
 
-    extend_size = MAX(newsize,CHUNKSIZE);
-    if ((bp = extend_heap(extend_size/WSIZE)) == NULL)
+    // extend_size = MAX(newsize,CHUNKSIZE);
+    // if ((bp = extend_heap(extend_size/WSIZE)) == NULL)
+    if ((bp = extend_heap(CHUNKSIZE/WSIZE)) == NULL) // 할당 요청 받은 사이즈보다 CHUNK(1MB)가 더큼
 	    return NULL;
     place(bp,newsize);
     return bp;
@@ -175,54 +179,60 @@ void *mm_malloc(size_t size)
 void mm_free(void *ptr)
 {
     size_t size = GET_SIZE(HDRP(ptr));
-    PUT(HDRP(ptr),PACK(GET_SIZE(HDRP(ptr))+GET_ALLOC_PREV(HDRP(ptr)),0));
-    PUT(FTRP(ptr),PACK(size,0));
+    PUT(HDRP(ptr),PACK(size,0));
     coalesce(ptr);
 }
 
 static void *coalesce(void *bp)
 {
-    size_t prev_alloc = GET_ALLOC_PREV(HDRP(bp));
-    size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-    size_t size = GET_SIZE(HDRP(bp));
+    // size_t prev_alloc = GET_ALLOC_PREV(HDRP(bp));
+    // size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
+    // size_t size = GET_SIZE(HDRP(bp));
 
-    if (prev_alloc && next_alloc) {
-        PUT(HDRP(bp),PACK(GET(HDRP(bp)),2));
-        PUT(HDRP(NEXT_BLKP(bp)),PACK(GET_SIZE(HDRP(NEXT_BLKP(bp))),1));
-        insert_to_list(bp);
-        
-    } else if (prev_alloc && !next_alloc) {
-        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        
+    while (!GET_ALLOC(HDRP(NEXT_BLKP(bp))) && (GET_SIZE(HDRP(NEXT_BLKP(bp)))==GET_SIZE(HDRP(bp)))) {
         stitch(NEXT_BLKP(bp));
-        PUT(HDRP(bp),PACK(size,2));
-        PUT(FTRP(bp),PACK(size,0));
-        insert_to_list(bp);
-
-    } else if (!prev_alloc && next_alloc) {
-        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        
-        bp = PREV_BLKP(bp);
-        stitch(bp);
-        PUT(HDRP(bp),PACK(size,2));
-        PUT(FTRP(bp),PACK(size,0));
-        PUT(HDRP(NEXT_BLKP(bp)),PACK(GET_SIZE(HDRP(NEXT_BLKP(bp))),1));
-        insert_to_list(bp);
-
-    } else {
-        size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        
-        stitch(PREV_BLKP(bp));
-        stitch(NEXT_BLKP(bp));
-        bp = PREV_BLKP(bp);
-        PUT(HDRP(bp),PACK(size,2));
-        PUT(FTRP(bp),PACK(size,0));
-        PUT(HDRP(NEXT_BLKP(bp)),PACK(GET_SIZE(HDRP(NEXT_BLKP(bp))),1));
-        insert_to_list(bp);
-
+        PUT(HDRP(bp),GET_SIZE(HDRP(bp))<<1);
     }
+    insert_to_list(bp);
     return bp;
+
+    // if (prev_alloc && next_alloc) {
+    //     PUT(HDRP(bp),PACK(GET(HDRP(bp)),2));
+    //     PUT(HDRP(NEXT_BLKP(bp)),PACK(GET_SIZE(HDRP(NEXT_BLKP(bp))),1));
+    //     insert_to_list(bp);
+        
+    // } else if (prev_alloc && !next_alloc) {
+    //     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+        
+    //     stitch(NEXT_BLKP(bp));
+    //     PUT(HDRP(bp),PACK(size,2));
+    //     PUT(FTRP(bp),PACK(size,0));
+    //     insert_to_list(bp);
+
+    // } else if (!prev_alloc && next_alloc) {
+    //     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+        
+    //     bp = PREV_BLKP(bp);
+    //     stitch(bp);
+    //     PUT(HDRP(bp),PACK(size,2));
+    //     PUT(FTRP(bp),PACK(size,0));
+    //     PUT(HDRP(NEXT_BLKP(bp)),PACK(GET_SIZE(HDRP(NEXT_BLKP(bp))),1));
+    //     insert_to_list(bp);
+
+    // } else {
+    //     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
+    //     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
+        
+    //     stitch(PREV_BLKP(bp));
+    //     stitch(NEXT_BLKP(bp));
+    //     bp = PREV_BLKP(bp);
+    //     PUT(HDRP(bp),PACK(size,2));
+    //     PUT(FTRP(bp),PACK(size,0));
+    //     PUT(HDRP(NEXT_BLKP(bp)),PACK(GET_SIZE(HDRP(NEXT_BLKP(bp))),1));
+    //     insert_to_list(bp);
+
+    // }
+    // return bp;
 }
 
 static void stitch(void *bp) {
@@ -245,7 +255,7 @@ static void stitch(void *bp) {
 
 int size_class_index(size_t size) {
     int result = 27 - __builtin_clz(1<<(32 - __builtin_clz(size-1)));
-    return MIN(result,9);
+    return MIN(result,FREE_LIST_COUNT-1);
 }
 
 static void insert_to_list(void *bp) {
@@ -303,24 +313,33 @@ static void *find_fit(size_t size)
 // footer없으니 할당할때 next block header에 표시
 static void place(void *bp, size_t size)
 {
-    size_t least_size = 16;
-    size_t current_size = GET_SIZE(HDRP(bp));
+    // size_t least_size = 16;
+    // size_t current_size = GET_SIZE(HDRP(bp));
 
-    if (current_size-size < least_size){
-
-        stitch(bp);
-        PUT(HDRP(bp),PACK(current_size,3));
-        PUT(HDRP(NEXT_BLKP(bp)),PACK(GET(HDRP(NEXT_BLKP(bp))),2));
-
-    } else {
-
-        stitch(bp);
-        PUT(HDRP(bp),PACK(size,3));
-        bp = NEXT_BLKP(bp);
-        PUT(HDRP(bp),PACK(current_size-size,2));
-        PUT(FTRP(bp),PACK(current_size-size,0));
-        PUT(HDRP(NEXT_BLKP(bp)),PACK(GET(HDRP(NEXT_BLKP(bp))),2));
-        insert_to_list(bp);
-
+    stitch(bp);
+    while (GET_SIZE(HDRP(bp))>size) {
+        PUT(HDRP(bp),PACK((GET_SIZE(HDRP(bp))>>1),0));
+        PUT(HDRP(NEXT_BLKP(bp)),PACK(GET_SIZE(HDRP(bp)),0));
+        insert_to_list(NEXT_BLKP(bp));
     }
+
+    PUT(HDRP(bp),PACK(size,1));
+
+    // if (current_size-size < least_size){
+
+    //     stitch(bp);
+    //     PUT(HDRP(bp),PACK(current_size,3));
+    //     PUT(HDRP(NEXT_BLKP(bp)),PACK(GET(HDRP(NEXT_BLKP(bp))),2));
+
+    // } else {
+
+    //     stitch(bp);
+    //     PUT(HDRP(bp),PACK(size,3));
+    //     bp = NEXT_BLKP(bp);
+    //     PUT(HDRP(bp),PACK(current_size-size,2));
+    //     PUT(FTRP(bp),PACK(current_size-size,0));
+    //     PUT(HDRP(NEXT_BLKP(bp)),PACK(GET(HDRP(NEXT_BLKP(bp))),2));
+    //     insert_to_list(bp);
+
+    // }
 }
