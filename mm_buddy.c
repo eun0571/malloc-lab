@@ -300,6 +300,28 @@ static void *find_fit(size_t size)
         }
     }
     return NULL;
+
+    // 지연 병합 구현 ing...
+    //     void *bp;
+
+    // int index = size_class_index(size);
+
+    // for (bp = (void *)GET(heap_listp+(index*WSIZE)); bp != heap_listp; bp = (void *)GET(bp+WSIZE)) {
+    //     if (GET_SIZE(HDRP(bp))>=size){
+    //         return bp;
+    //     }
+    // }
+
+    // index += 1;
+
+    // for (; index<FREE_LIST_COUNT; index++) {
+    //     for (bp = (void *)GET(heap_listp+(index*WSIZE)); bp != heap_listp; bp = (void *)GET(bp+WSIZE)) {
+    //         if (GET_SIZE(HDRP(bp))>=size){
+    //             return bp;
+    //         }
+    //     }
+    // }
+    // return NULL;
 }
 
 // footer없으니 할당할때 next block header에 표시
