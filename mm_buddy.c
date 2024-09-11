@@ -37,11 +37,11 @@ team_t team = {
 
 /* single word (4) or double word (8) alignment */
 // #define ALIGNMENT 8
-#define ALIGNMENT 4
+#define ALIGNMENT 8
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 // #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
-#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x3)
+#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t))) // 4 in -m32
 
@@ -80,7 +80,7 @@ team_t team = {
    trace에서 확인해보면 random*.rep 생성시 args없으면 1<<15가 max block size인데 Makefile에 따로 args가 없는 듯 함.
    realloc*.rep 생성에서는 realloc을 최대 614,784까지 요청
    따라서 1MB까지 size class있어야함. (1<<20)
- * free block에 Header, Prev, Next 있어야하니 최소 사이즈 16B(1<<4)
+ * free block에 Header, Prev, Next 있어 최소 사이즈 16B(1<<4)
    (1<<4), (1<<5), (1<<6), (1<<7), (1<<8), (1<<9), (1<<10), ... (1<<19), (1<<20)
    총 17개의 size class존재
  * 분할 및 coalescing은 2의 제곱수 기준으로 수행
@@ -167,7 +167,7 @@ void *mm_malloc(size_t size)
 
     // extend_size = MAX(newsize,CHUNKSIZE);
     // if ((bp = extend_heap(extend_size/WSIZE)) == NULL)
-    if ((bp = extend_heap(CHUNKSIZE/WSIZE)) == NULL) // 할당 요청 받은 사이즈보다 CHUNK(1MB)가 더큼
+    if ((bp = extend_heap(newsize/WSIZE)) == NULL) // 할당 요청 받은 사이즈보다 CHUNK(1MB)가 더큼
 	    return NULL;
     place(bp,newsize);
     return bp;
@@ -185,9 +185,6 @@ void mm_free(void *ptr)
 
 static void *coalesce(void *bp)
 {
-    // size_t prev_alloc = GET_ALLOC_PREV(HDRP(bp));
-    // size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp)));
-    // size_t size = GET_SIZE(HDRP(bp));
 
     while (!GET_ALLOC(HDRP(NEXT_BLKP(bp))) && (GET_SIZE(HDRP(NEXT_BLKP(bp)))==GET_SIZE(HDRP(bp)))) {
         stitch(NEXT_BLKP(bp));
@@ -196,43 +193,6 @@ static void *coalesce(void *bp)
     insert_to_list(bp);
     return bp;
 
-    // if (prev_alloc && next_alloc) {
-    //     PUT(HDRP(bp),PACK(GET(HDRP(bp)),2));
-    //     PUT(HDRP(NEXT_BLKP(bp)),PACK(GET_SIZE(HDRP(NEXT_BLKP(bp))),1));
-    //     insert_to_list(bp);
-        
-    // } else if (prev_alloc && !next_alloc) {
-    //     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-        
-    //     stitch(NEXT_BLKP(bp));
-    //     PUT(HDRP(bp),PACK(size,2));
-    //     PUT(FTRP(bp),PACK(size,0));
-    //     insert_to_list(bp);
-
-    // } else if (!prev_alloc && next_alloc) {
-    //     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        
-    //     bp = PREV_BLKP(bp);
-    //     stitch(bp);
-    //     PUT(HDRP(bp),PACK(size,2));
-    //     PUT(FTRP(bp),PACK(size,0));
-    //     PUT(HDRP(NEXT_BLKP(bp)),PACK(GET_SIZE(HDRP(NEXT_BLKP(bp))),1));
-    //     insert_to_list(bp);
-
-    // } else {
-    //     size += GET_SIZE(HDRP(NEXT_BLKP(bp)));
-    //     size += GET_SIZE(HDRP(PREV_BLKP(bp)));
-        
-    //     stitch(PREV_BLKP(bp));
-    //     stitch(NEXT_BLKP(bp));
-    //     bp = PREV_BLKP(bp);
-    //     PUT(HDRP(bp),PACK(size,2));
-    //     PUT(FTRP(bp),PACK(size,0));
-    //     PUT(HDRP(NEXT_BLKP(bp)),PACK(GET_SIZE(HDRP(NEXT_BLKP(bp))),1));
-    //     insert_to_list(bp);
-
-    // }
-    // return bp;
 }
 
 static void stitch(void *bp) {
@@ -259,7 +219,39 @@ int size_class_index(size_t size) {
 }
 
 static void insert_to_list(void *bp) {
+    
+    // Address Ordered
+    // int index = size_class_index(GET_SIZE(HDRP(bp)));
+    
+    // if (GET(heap_listp+(index*WSIZE))==(int)heap_listp) {
+    //     PUT(heap_listp+(index*WSIZE),bp);
+    //     PUT(bp,heap_listp);
+    //     PUT(bp+WSIZE,heap_listp);
+    // } else {
+    //     void * succ_listp = (void *)GET(heap_listp+(index*WSIZE));
+        
+    //     while ((succ_listp < bp) && ((void *)GET(succ_listp+WSIZE)!=heap_listp)) {
+    //         succ_listp = (void *)GET(succ_listp+WSIZE);
+    //     }
 
+    //     if (bp < succ_listp) {
+    //         if ((void *)GET(succ_listp) == heap_listp) {
+    //             PUT(heap_listp+(index*WSIZE),bp);
+    //             PUT(bp,heap_listp);
+    //         } else {
+    //             PUT(GET(succ_listp)+WSIZE,bp);
+    //             PUT(bp,GET(succ_listp));
+    //         }
+    //         PUT(bp+WSIZE,succ_listp);
+    //         PUT(succ_listp,bp);
+    //     } else {
+    //         PUT(succ_listp+WSIZE,bp);
+    //         PUT(bp,succ_listp);
+    //         PUT(bp+WSIZE,heap_listp);
+    //     }
+    // }
+
+    // LIFO
     int index = size_class_index(GET_SIZE(HDRP(bp)));
     
     if (GET(heap_listp+(index*WSIZE))==(int)heap_listp) {
@@ -325,21 +317,4 @@ static void place(void *bp, size_t size)
 
     PUT(HDRP(bp),PACK(size,1));
 
-    // if (current_size-size < least_size){
-
-    //     stitch(bp);
-    //     PUT(HDRP(bp),PACK(current_size,3));
-    //     PUT(HDRP(NEXT_BLKP(bp)),PACK(GET(HDRP(NEXT_BLKP(bp))),2));
-
-    // } else {
-
-    //     stitch(bp);
-    //     PUT(HDRP(bp),PACK(size,3));
-    //     bp = NEXT_BLKP(bp);
-    //     PUT(HDRP(bp),PACK(current_size-size,2));
-    //     PUT(FTRP(bp),PACK(current_size-size,0));
-    //     PUT(HDRP(NEXT_BLKP(bp)),PACK(GET(HDRP(NEXT_BLKP(bp))),2));
-    //     insert_to_list(bp);
-
-    // }
 }

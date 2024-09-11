@@ -55,14 +55,12 @@
 /* 
  * Alignment requirement in bytes (either 4 or 8) 
  */
-// #define ALIGNMENT 8  
-#define ALIGNMENT 4  
+#define ALIGNMENT 8  
 
 /* 
  * Maximum heap size in bytes 
  */
-// #define MAX_HEAP (20*(1<<20))  /* 20 MB */
-#define MAX_HEAP (40*(1<<20))  /* 20 MB */
+#define MAX_HEAP (20*(1<<20))  /* 20 MB */
 
 /*****************************************************************************
  * Set exactly one of these USE_xxx constants to "1" to select a timing method
