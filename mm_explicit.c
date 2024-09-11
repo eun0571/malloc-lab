@@ -35,13 +35,25 @@ team_t team = {
     "skdltm622@gmail.com"
 };
 
+/*********************************************************
+ * For REVIEWERS
+ *********************************************************
+ * free list는 LIFO로 관리
+ * 컴파일 32비트인지 모르고 포인터 8바이트로 생각해서 PREV,NEXT 주소 공간 8바이트로 잡음. 대신 -m64로 컴파일해도 돌아감.
+ * 할당시 footer 없애는 optimization 없음.
+ * free list의 시작과 끝을 prologue(first_listp)와 epilogue(last_listp)로 잡음. (24/1), (0/1)
+   보통 첫번째 free block의 주소를 전역변수로 잡고 prologue를 free list의 마지막 요소로 잡던데
+   첫번째 요소를 free list에서 제거시 조건문이 들어가던데 처음과 끝을 할당된 block으로 잡으면 그부분에서는 좀 간단해짐
+   여기서는 stitch()가 이중 연결 없애주는 역할
+ ********************************************************/
+
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
 
 /* rounds up to the nearest multiple of ALIGNMENT */
 #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
 
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
+// #define SIZE_T_SIZE (ALIGN(sizeof(size_t))) // 안씀
 
 /* Basic constants an macros */
 #define WSIZE               4
@@ -66,18 +78,6 @@ team_t team = {
 
 #define NEXT_BLKP(bp)       ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BLKP(bp)       ((char *)(bp) - GET_SIZE(HDRP(bp)-WSIZE))
-
-/*********************************************************
- * For REVIEWERS
- *********************************************************
- * free list는 LIFO로 관리
- * 컴파일 32비트인지 모르고 포인터 8바이트로 생각해서 PREV,NEXT 주소 공간 8바이트로 잡음. 대신 -m64로 컴파일해도 돌아감.
- * 할당시 footer 없애는 optimization 없음.
- * free list의 시작과 끝을 prologue(first_listp)와 epilogue(last_listp)로 잡음. (24/1), (0/1)
-   보통 첫번째 free block의 주소를 전역변수로 잡고 prologue를 free list의 마지막 요소로 잡던데
-   첫번째 요소를 free list에서 제거시 조건문이 들어가던데 처음과 끝을 할당된 block으로 잡으면 그부분에서는 좀 간단해짐
-   여기서는 stitch()가 이중 연결 없애주는 역할
- ********************************************************/
 
 static void *extend_heap(size_t words);
 static void *coalesce(void *bp);

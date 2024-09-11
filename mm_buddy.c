@@ -35,46 +35,11 @@ team_t team = {
     "skdltm622@gmail.com"
 };
 
-/* single word (4) or double word (8) alignment */
-// #define ALIGNMENT 8
-#define ALIGNMENT 8
-
-/* rounds up to the nearest multiple of ALIGNMENT */
-// #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
-#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
-
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t))) // 4 in -m32
-
-/* Basic constants an macros */
-#define WSIZE               4
-#define DSIZE               8
-// #define CHUNKSIZE           (1<<12) // 4KB
-#define CHUNKSIZE           (1<<20) // 1MB
-
-#define MAX(x,y)            ((x)>(y)?(x):(y))
-#define MIN(x,y)            ((x)>(y)?(y):(x))
-
-#define PACK(size, alloc)   ((size)|(alloc))
-
-#define GET(p)              (*(unsigned int*)(p))
-#define PUT(p,val)          (*(unsigned int*)(p)=(int)(val))
-
-// #define GET_SIZE(p)         (GET(p) & ~0x7)
-#define GET_SIZE(p)         (GET(p) & ~0x3)
-
-#define GET_ALLOC(p)        (GET(p) & 0x1)
-#define GET_ALLOC_PREV(p)   (GET(p) & 0x2)
-
-#define HDRP(bp)            ((char *)(bp)-WSIZE)
-// #define FTRP(bp)            ((char *)(bp) + GET_SIZE(HDRP(bp))-DSIZE)
-
-#define NEXT_BLKP(bp)       ((char *)(bp) + GET_SIZE(HDRP(bp)))
-#define PREV_BLKP(bp)       ((char *)(bp) - GET_SIZE(HDRP(bp)-WSIZE))
-
 /*********************************************************
  * For REVIEWERS
  *********************************************************
- * PREV_BLK으로 넘어갈 일이 없으니 format에 footer는 필요없을 듯?
+ * PREV_BLK으로 넘어갈 일이 없으니 format에 footer는 필요없어 사용 x
+ * allocated block은 Header+data, free block은 Header+PREV+NEXT
  * size class는 power of 2이다.
    buddy system에서 size class는 할당요청을 커버하는 모든 size class가 존재해야하는데
    trace에서 확인해보면 random*.rep 생성시 args없으면 1<<15가 max block size인데 Makefile에 따로 args가 없는 듯 함.
@@ -84,7 +49,41 @@ team_t team = {
    (1<<4), (1<<5), (1<<6), (1<<7), (1<<8), (1<<9), (1<<10), ... (1<<19), (1<<20)
    총 17개의 size class존재
  * 분할 및 coalescing은 2의 제곱수 기준으로 수행
+ * __builtin_clz 사용했으므로 gcc나 clang에서만 동작
  ********************************************************/
+
+/* single word (4) or double word (8) alignment */
+#define ALIGNMENT 8
+
+/* rounds up to the nearest multiple of ALIGNMENT */
+#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
+
+#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
+
+/* Basic constants an macros */
+#define WSIZE               4
+#define DSIZE               8
+#define CHUNKSIZE           (1<<12) // 4KB
+
+#define MAX(x,y)            ((x)>(y)?(x):(y))
+#define MIN(x,y)            ((x)>(y)?(y):(x))
+
+#define PACK(size, alloc)   ((size)|(alloc))
+
+#define GET(p)              (*(unsigned int*)(p))
+#define PUT(p,val)          (*(unsigned int*)(p)=(int)(val))
+
+#define GET_SIZE(p)         (GET(p) & ~0x7)
+
+#define GET_ALLOC(p)        (GET(p) & 0x1)
+#define GET_ALLOC_PREV(p)   (GET(p) & 0x2)
+
+#define HDRP(bp)            ((char *)(bp)-WSIZE)
+// footer 안씀
+// #define FTRP(bp)            ((char *)(bp) + GET_SIZE(HDRP(bp))-DSIZE)
+
+#define NEXT_BLKP(bp)       ((char *)(bp) + GET_SIZE(HDRP(bp)))
+#define PREV_BLKP(bp)       ((char *)(bp) - GET_SIZE(HDRP(bp)-WSIZE))
 
 #define FREE_LIST_COUNT 17
 
@@ -95,7 +94,6 @@ static void place(void *bp, size_t size);
 static void stitch(void *bp);
 int size_class_index(size_t size);
 static void insert_to_list(void *bp);
-
 
 static char * heap_listp;
 
@@ -126,7 +124,7 @@ static void *extend_heap(size_t words)
 {
     char *bp;
     size_t size;
-    // alignment 4로 했으니 없어도 될듯? >> seg에서 터져서 일단 안건드림...
+
     size = (words % 2)? (words+1)*WSIZE : words * WSIZE;
 
     if ((long)(bp = mem_sbrk(size))==-1) {
@@ -324,7 +322,6 @@ static void *find_fit(size_t size)
     // return NULL;
 }
 
-// footer없으니 할당할때 next block header에 표시
 static void place(void *bp, size_t size)
 {
     // size_t least_size = 16;
@@ -340,3 +337,4 @@ static void place(void *bp, size_t size)
     PUT(HDRP(bp),PACK(size,1));
 
 }
+

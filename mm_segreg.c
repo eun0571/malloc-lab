@@ -35,42 +35,6 @@ team_t team = {
     "skdltm622@gmail.com"
 };
 
-/* single word (4) or double word (8) alignment */
-// #define ALIGNMENT 8
-#define ALIGNMENT 8
-
-/* rounds up to the nearest multiple of ALIGNMENT */
-// #define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
-#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
-
-#define SIZE_T_SIZE (ALIGN(sizeof(size_t))) // 4 in -m32
-
-/* Basic constants an macros */
-#define WSIZE               4
-#define DSIZE               8
-#define CHUNKSIZE           (1<<12) // 4KB
-// #define CHUNKSIZE           (1<<13) // 8KB
-
-#define MAX(x,y)            ((x)>(y)?(x):(y))
-#define MIN(x,y)            ((x)>(y)?(y):(x))
-
-#define PACK(size, alloc)   ((size)|(alloc))
-
-#define GET(p)              (*(unsigned int*)(p))
-#define PUT(p,val)          (*(unsigned int*)(p)=(unsigned int)(val))
-
-// #define GET_SIZE(p)         (GET(p) & ~0x7)
-#define GET_SIZE(p)         (GET(p) & ~0x3)
-
-#define GET_ALLOC(p)        (GET(p) & 0x1)
-#define GET_ALLOC_PREV(p)   (GET(p) & 0x2)
-
-#define HDRP(bp)            ((char *)(bp)-WSIZE)
-#define FTRP(bp)            ((char *)(bp) + GET_SIZE(HDRP(bp))-DSIZE)
-
-#define NEXT_BLKP(bp)       ((char *)(bp) + GET_SIZE(HDRP(bp)))
-#define PREV_BLKP(bp)       ((char *)(bp) - GET_SIZE(HDRP(bp)-WSIZE))
-
 /*********************************************************
  * For REVIEWERS
  *********************************************************
@@ -81,6 +45,38 @@ team_t team = {
  * 할당시 footer 지움(괜히 했음..)
  * __builtin_clz 사용했으므로 gcc나 clang에서만 동작
  ********************************************************/
+
+/* single word (4) or double word (8) alignment */
+#define ALIGNMENT 8
+
+/* rounds up to the nearest multiple of ALIGNMENT */
+#define ALIGN(size) (((size) + (ALIGNMENT-1)) & ~0x7)
+
+#define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
+
+/* Basic constants an macros */
+#define WSIZE               4
+#define DSIZE               8
+#define CHUNKSIZE           (1<<12) // 4KB
+
+#define MAX(x,y)            ((x)>(y)?(x):(y))
+#define MIN(x,y)            ((x)>(y)?(y):(x))
+
+#define PACK(size, alloc)   ((size)|(alloc))
+
+#define GET(p)              (*(unsigned int*)(p))
+#define PUT(p,val)          (*(unsigned int*)(p)=(unsigned int)(val))
+
+#define GET_SIZE(p)         (GET(p) & ~0x7)
+
+#define GET_ALLOC(p)        (GET(p) & 0x1)
+#define GET_ALLOC_PREV(p)   (GET(p) & 0x2)  // footer가 없어 prev_blk의 할당여부 표시
+
+#define HDRP(bp)            ((char *)(bp)-WSIZE)
+#define FTRP(bp)            ((char *)(bp) + GET_SIZE(HDRP(bp))-DSIZE)
+
+#define NEXT_BLKP(bp)       ((char *)(bp) + GET_SIZE(HDRP(bp)))
+#define PREV_BLKP(bp)       ((char *)(bp) - GET_SIZE(HDRP(bp)-WSIZE))
 
 #define FREE_LIST_COUNT 10
 
@@ -124,7 +120,7 @@ static void *extend_heap(size_t words)
 {
     char *bp;
     size_t size;
-    // alignment 4로 했으니 없어도 될듯? >> 일단 없애니 터짐...
+
     size = (words % 2)? (words+1)*WSIZE : words * WSIZE;
 
     if ((long)(bp = mem_sbrk(size))==-1) {

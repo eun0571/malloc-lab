@@ -35,6 +35,12 @@ team_t team = {
     "skdltm622@gmail.com"
 };
 
+/*********************************************************
+ * For REVIEWERS
+ *********************************************************
+ * 할당시 footer 없애는 optimization 없음.
+ ********************************************************/
+
 /* single word (4) or double word (8) alignment */
 #define ALIGNMENT 8
 
@@ -63,12 +69,6 @@ team_t team = {
 
 #define NEXT_BLKP(bp)       ((char *)(bp) + GET_SIZE(HDRP(bp)))
 #define PREV_BLKP(bp)       ((char *)(bp) - GET_SIZE(HDRP(bp)-WSIZE))
-
-/*********************************************************
- * For REVIEWERS
- *********************************************************
- * 할당시 footer 없애는 optimization 없음.
- ********************************************************/
 
 static char * heap_listp;
 
@@ -126,7 +126,7 @@ void *mm_malloc(size_t size)
     if (size==0) {
         return NULL;
     }
-    size_t newsize = ALIGN(size + SIZE_T_SIZE);
+    size_t newsize = ALIGN(size + DSIZE);
     
     if ((bp = find_fit(newsize))!=NULL){
         place(bp,newsize);
